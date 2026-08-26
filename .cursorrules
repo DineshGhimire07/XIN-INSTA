@@ -1,0 +1,11 @@
+# Cursor Rules for XINVORA Social Commerce Automation Platform
+
+# Core Rules:
+1. Always follow AGENTS.md and the docs in /docs/.
+2. Use Next.js 14+ App Router, TypeScript (Strict), Supabase/PostgreSQL, and custom modern CSS/Tailwind.
+3. Never bypass ComplianceGatekeeper: All outbound messages must pass through lib/compliance/gatekeeper.ts.
+4. Enforce Meta's 7-day single private reply limit and 24-hour standard messaging window.
+5. All Meta Graph API calls must be isolated inside lib/adapters/ (instagram.adapter.ts & facebook.adapter.ts). Never call Meta APIs directly in UI components or business services.
+6. Encrypt all OAuth access tokens using AES-256-GCM before saving to PostgreSQL.
+7. Use SHA-256 idempotency keys on all webhook ingestion jobs to prevent duplicate replies.
+8. When building UI, follow a sleek, high-contrast dark theme with glassmorphic cards and micro-animations.
