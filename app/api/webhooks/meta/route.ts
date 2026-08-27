@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 
   for (const entry of entries) {
     // -------------------------------------------------------------
-    // A. INBOUND DIRECT MESSAGES (DMs) — Conversation Starters & FAQs
+    // A. INBOUND DIRECT MESSAGES (DMs) — Template 1 & Custom Auto-Replies
     // -------------------------------------------------------------
     const messaging = (entry.messaging as Array<Record<string, any>>) || [];
     for (const msgEvent of messaging) {
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
               payload: { mid, timestamp: msgEvent.timestamp, quickReplyPayload },
             });
 
-            // 4. Smart Conversation Starter & FAQ Branching
+            // 4. Evaluate Automation Rules (Template 1 & Custom DM Rules)
             if (conversation.status === 'AUTOMATED' && channel?.encrypted_access_token) {
               try {
                 const accessToken = decryptToken(channel.encrypted_access_token);
@@ -164,57 +164,7 @@ export async function POST(req: NextRequest) {
                     text: handoffText,
                   });
                 } 
-                // Branch 1: "💰 What are your prices?" / Pricing inquiry
-                else if (
-                  quickReplyPayload === 'FAQ_PRICES' ||
-                  textLower.includes('price') ||
-                  textLower.includes('kati') ||
-                  textLower.includes('cost') ||
-                  textLower.includes('rate')
-                ) {
-                  const { data: activeProduct } = await supabaseServer
-                    .from('products')
-                    .select('*')
-                    .eq('is_active', true)
-                    .limit(1)
-                    .single();
-
-                  const product = activeProduct || {
-                    title: 'Black Velvet Party Dress',
-                    price: 3499,
-                    currency: 'NPR',
-                    image_url: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
-                    product_url: 'https://xin-insta.vercel.app',
-                  };
-
-                  const replyText = `💰 Here is our featured collection pricing! Tap below to view details and order directly:`;
-                  await adapter.sendDirectMessage(accessToken, senderId, replyText);
-                  await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
-                    title: product.title,
-                    subtitle: `${product.currency || 'NPR'} ${product.price}`,
-                    imageUrl: product.image_url,
-                    productUrl: product.product_url,
-                    buttonText: 'VIEW PRICE',
-                  });
-
-                  await supabaseServer.from('conversation_messages').insert([
-                    {
-                      conversation_id: conversation.id,
-                      direction: 'OUTBOUND',
-                      sender_type: 'BOT',
-                      message_type: 'DIRECT_MESSAGE',
-                      text: replyText,
-                    },
-                    {
-                      conversation_id: conversation.id,
-                      direction: 'OUTBOUND',
-                      sender_type: 'BOT',
-                      message_type: 'DIRECT_MESSAGE',
-                      text: `${product.title} - ${product.currency || 'NPR'} ${product.price}`,
-                    },
-                  ]);
-                }
-                // Branch 2: "📦 Do you provide delivery?" / Delivery info
+                // Branch: Delivery Info
                 else if (
                   quickReplyPayload === 'FAQ_DELIVERY' ||
                   textLower.includes('delivery') ||
@@ -233,7 +183,7 @@ export async function POST(req: NextRequest) {
                     text: deliveryText,
                   });
                 }
-                // Branch 3: "💵 Is Cash on Delivery (COD) available?" / COD inquiry
+                // Branch: Cash on Delivery (COD)
                 else if (
                   quickReplyPayload === 'FAQ_COD' ||
                   textLower.includes('cod') ||
@@ -251,53 +201,83 @@ export async function POST(req: NextRequest) {
                     text: codText,
                   });
                 }
-                // Branch 4: General Inbound / Greeting / First Message
+                // Branch: Custom DM Automation (Template 1 / Keyword / Any-Text Auto-Reply)
                 else {
-                  const welcomeMenuText = `👋 Welcome to XINVORA! ✨\nThank you for reaching out! How can we assist you today?\n\n💬 Quick Options:\n1️⃣ 💰 What are your prices?\n2️⃣ 📦 Do you provide delivery?\n3️⃣ 💵 Is Cash on Delivery (COD) available?\n\nOr feel free to ask any question below!`;
-
-                  const { data: activeProduct } = await supabaseServer
-                    .from('products')
+                  // Fetch active DM automation from database
+                  const { data: dmAutomation } = await supabaseServer
+                    .from('automations')
                     .select('*')
-                    .eq('is_active', true)
+                    .eq('trigger_type', 'DM')
+                    .eq('status', 'ACTIVE')
                     .limit(1)
                     .single();
 
-                  const product = activeProduct || {
-                    title: 'Black Velvet Party Dress',
-                    price: 3499,
-                    currency: 'NPR',
-                    image_url: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
-                    product_url: 'https://xin-insta.vercel.app',
-                  };
+                  const flowData = (dmAutomation?.flow_graph as Record<string, any>) || {};
+                  const triggerMode = flowData.triggerMode || 'ANY_TEXT';
+                  const keywords: string[] = flowData.keywords || ['hi', 'hello', 'hey', 'price', 'kati'];
+                  const replyText =
+                    flowData.replyText ||
+                    '👋 Hello! Welcome to XINVORA ✨\nThank you for reaching out to us. How can we help you today? Let us know what you are looking for!';
+                  const attachProductCard = flowData.attachProductCard ?? true;
 
-                  await adapter.sendDirectMessage(accessToken, senderId, welcomeMenuText);
-                  await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
-                    title: product.title,
-                    subtitle: `${product.currency || 'NPR'} ${product.price}`,
-                    imageUrl: product.image_url,
-                    productUrl: product.product_url,
-                    buttonText: 'VIEW PRICE',
-                  });
+                  let shouldTrigger = false;
+                  if (triggerMode === 'ANY_TEXT') {
+                    shouldTrigger = true;
+                  } else if (triggerMode === 'KEYWORDS') {
+                    shouldTrigger = keywords.some((k) =>
+                      textLower.includes(k.toLowerCase().trim())
+                    );
+                  }
 
-                  await supabaseServer.from('conversation_messages').insert([
-                    {
+                  if (shouldTrigger) {
+                    // Send custom reply text
+                    await adapter.sendDirectMessage(accessToken, senderId, replyText);
+
+                    await supabaseServer.from('conversation_messages').insert({
                       conversation_id: conversation.id,
                       direction: 'OUTBOUND',
                       sender_type: 'BOT',
                       message_type: 'DIRECT_MESSAGE',
-                      text: welcomeMenuText,
-                    },
-                    {
-                      conversation_id: conversation.id,
-                      direction: 'OUTBOUND',
-                      sender_type: 'BOT',
-                      message_type: 'DIRECT_MESSAGE',
-                      text: `${product.title} - ${product.currency || 'NPR'} ${product.price}`,
-                    },
-                  ]);
+                      text: replyText,
+                    });
+
+                    // If enabled, attach product card
+                    if (attachProductCard) {
+                      const { data: activeProduct } = await supabaseServer
+                        .from('products')
+                        .select('*')
+                        .eq('is_active', true)
+                        .limit(1)
+                        .single();
+
+                      const product = activeProduct || {
+                        title: 'Black Velvet Party Dress',
+                        price: 3499,
+                        currency: 'NPR',
+                        image_url: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
+                        product_url: 'https://xin-insta.vercel.app',
+                      };
+
+                      await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
+                        title: product.title,
+                        subtitle: `${product.currency || 'NPR'} ${product.price}`,
+                        imageUrl: product.image_url,
+                        productUrl: product.product_url,
+                        buttonText: 'VIEW PRICE',
+                      });
+
+                      await supabaseServer.from('conversation_messages').insert({
+                        conversation_id: conversation.id,
+                        direction: 'OUTBOUND',
+                        sender_type: 'BOT',
+                        message_type: 'DIRECT_MESSAGE',
+                        text: `${product.title} - ${product.currency || 'NPR'} ${product.price}`,
+                      });
+                    }
+                  }
                 }
               } catch (dispatchErr) {
-                console.error('[Meta Webhook] Failed to auto-dispatch welcome reply:', dispatchErr);
+                console.error('[Meta Webhook] Failed to auto-dispatch reply:', dispatchErr);
               }
             }
           }

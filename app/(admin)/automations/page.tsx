@@ -158,6 +158,41 @@ const SAMPLE_REELS: InstagramReelItem[] = [
 
 const TEMPLATES: AutomationTemplate[] = [
   {
+    id: 'template-1-custom-dm-reply',
+    title: 'Template 1: Custom DM Auto-Reply (Any Text / Selected Keywords)',
+    description: 'Instant automated direct message responder. Choose to trigger on ALL incoming messages (e.g. "hi", "hello") or ONLY when users mention specific selected keywords (e.g. "price", "kati", "order").',
+    category: 'CUSTOMER_CARE',
+    badge: '100% Configurable',
+    stepCount: 2,
+    previewGradient: 'from-purple-500/20 to-indigo-500/20 border-purple-500/30',
+    previewPills: ['Any Text or Keyword Trigger', 'Custom Reply Message', 'Optional Product Card'],
+    nodes: [
+      {
+        id: 'trig-t1',
+        type: 'trigger',
+        title: 'When...',
+        subtitle: 'User sends any DM or mentions selected keywords',
+        content: 'Keywords: hi, hello, hey, price, kati, order',
+        x: 60,
+        y: 280,
+      },
+      {
+        id: 'msg-t1-reply',
+        type: 'message',
+        title: 'Instagram Custom Auto-Reply',
+        content: '👋 Hello! Welcome to XINVORA ✨\nThank you for reaching out to us. How can we help you today? Let us know what you are looking for!',
+        buttons: [
+          { id: 'btn-t1-catalog', label: 'VIEW PRICE & CATALOG 🛍️', actionType: 'OPEN_URL', url: 'https://xin-insta.vercel.app' },
+        ],
+        x: 440,
+        y: 280,
+      },
+    ],
+    edges: [
+      { id: 'e-t1-main', from: 'trig-t1', to: 'msg-t1-reply', branch: 'default' },
+    ],
+  },
+  {
     id: 'reel-auto-dm-random-reply',
     title: 'Reel Comment-to-DM with Reel Picker & Random Reply Pool',
     description: 'Bind to any specific Instagram Reel. When users comment, send a private DM and pick randomly from 4 public comment replies. Handles repeat comments seamlessly.',
@@ -356,7 +391,18 @@ export default function AutomationHubPage() {
 
   const [newPublicReplyText, setNewPublicReplyText] = useState('');
 
-  // Load Synced Reels
+  // Template 1 Custom DM Auto-Reply State
+  const [isTemplate1ModalOpen, setIsTemplate1ModalOpen] = useState(false);
+  const [t1TriggerMode, setT1TriggerMode] = useState<'ANY_TEXT' | 'KEYWORDS'>('ANY_TEXT');
+  const [t1Keywords, setT1Keywords] = useState<string[]>(['hi', 'hello', 'hey', 'price', 'kati', 'order', 'link']);
+  const [t1NewKeyword, setT1NewKeyword] = useState('');
+  const [t1ReplyText, setT1ReplyText] = useState('👋 Hello! Welcome to XINVORA ✨\nThank you for reaching out to us. How can we help you today? Let us know what you are looking for!');
+  const [t1AttachProduct, setT1AttachProduct] = useState(true);
+  const [t1Status, setT1Status] = useState<'ACTIVE' | 'PAUSED'>('ACTIVE');
+  const [t1IsSaving, setT1IsSaving] = useState(false);
+  const [t1SaveSuccess, setT1SaveSuccess] = useState(false);
+
+  // Load Synced Reels & Template 1 config from Supabase
   useEffect(() => {
     fetch('/api/content/reels')
       .then((r) => r.json())
@@ -366,9 +412,63 @@ export default function AutomationHubPage() {
         }
       })
       .catch(console.error);
+
+    fetch('/api/automations')
+      .then((r) => r.json())
+      .then((data) => {
+        const dm = data?.automations?.find((a: any) => a.trigger_type === 'DM');
+        if (dm) {
+          const flow = dm.flow_graph || {};
+          if (flow.triggerMode) setT1TriggerMode(flow.triggerMode);
+          if (flow.keywords) setT1Keywords(flow.keywords);
+          if (flow.replyText) setT1ReplyText(flow.replyText);
+          if (flow.attachProductCard !== undefined) setT1AttachProduct(flow.attachProductCard);
+          if (dm.status) setT1Status(dm.status);
+        }
+      })
+      .catch(console.error);
   }, []);
 
+  const handleSaveTemplate1 = async () => {
+    setT1IsSaving(true);
+    try {
+      const res = await fetch('/api/automations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'b0000000-0000-0000-0000-000000000001',
+          name: 'Template 1: Custom DM Auto-Reply (Any Text / Keywords)',
+          triggerType: 'DM',
+          status: t1Status,
+          flowGraph: {
+            templateId: 'template-1-custom-dm-reply',
+            triggerMode: t1TriggerMode,
+            keywords: t1Keywords,
+            replyText: t1ReplyText,
+            attachProductCard: t1AttachProduct,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setT1SaveSuccess(true);
+        setTimeout(() => {
+          setT1SaveSuccess(false);
+          setIsTemplate1ModalOpen(false);
+        }, 1500);
+      }
+    } catch (err) {
+      alert('Failed to save Template 1 automation.');
+    } finally {
+      setT1IsSaving(false);
+    }
+  };
+
   const handleUseTemplate = (template: AutomationTemplate) => {
+    if (template.id === 'template-1-custom-dm-reply') {
+      setIsTemplate1ModalOpen(true);
+      return;
+    }
     setFlowTitle(template.title);
     setNodes(template.nodes);
     setEdges(template.edges);
@@ -1551,6 +1651,235 @@ export default function AutomationHubPage() {
 
         </div>
       </div>
+
+      {/* TEMPLATE 1: CUSTOM DM AUTO-REPLY CONFIGURATION MODAL */}
+      {isTemplate1ModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-zinc-200 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-zinc-100 flex items-center justify-between bg-gradient-to-r from-purple-50/50 to-indigo-50/50">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-purple-600 text-white flex items-center justify-center shadow-md shadow-purple-500/20">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-zinc-900">
+                    Template 1: Custom DM Auto-Responder
+                  </h3>
+                  <p className="text-xs text-zinc-500">
+                    Automate custom direct message replies for all incoming texts or specific keywords.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsTemplate1ModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-500 flex items-center justify-center transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6 overflow-y-auto flex-1">
+              {/* Status Toggle */}
+              <div className="p-4 rounded-2xl bg-zinc-50 border border-zinc-200/80 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-zinc-900">Automation Status</h4>
+                  <p className="text-[11px] text-zinc-500">
+                    When active, incoming Instagram DMs will be automatically processed.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setT1Status((s) => (s === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'))}
+                  className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm ${
+                    t1Status === 'ACTIVE'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-zinc-200 text-zinc-700'
+                  }`}
+                >
+                  {t1Status === 'ACTIVE' ? '✓ ACTIVE' : '⏸ PAUSED'}
+                </button>
+              </div>
+
+              {/* Step 1: Trigger Condition */}
+              <div className="space-y-3">
+                <label className="text-xs font-bold text-zinc-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-purple-600" />
+                  <span>1. Inbound Trigger Condition</span>
+                </label>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div
+                    onClick={() => setT1TriggerMode('ANY_TEXT')}
+                    className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                      t1TriggerMode === 'ANY_TEXT'
+                        ? 'border-purple-600 bg-purple-50/50 shadow-sm'
+                        : 'border-zinc-200 hover:border-zinc-300 bg-white'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-bold text-zinc-900">Any Inbound Message</span>
+                      <input
+                        type="radio"
+                        checked={t1TriggerMode === 'ANY_TEXT'}
+                        onChange={() => setT1TriggerMode('ANY_TEXT')}
+                        className="text-purple-600"
+                      />
+                    </div>
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      Responds to <strong>every incoming DM</strong> (e.g. "hi", "hello", "hey", or any question).
+                    </p>
+                  </div>
+
+                  <div
+                    onClick={() => setT1TriggerMode('KEYWORDS')}
+                    className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                      t1TriggerMode === 'KEYWORDS'
+                        ? 'border-purple-600 bg-purple-50/50 shadow-sm'
+                        : 'border-zinc-200 hover:border-zinc-300 bg-white'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-bold text-zinc-900">Specific Keywords Only</span>
+                      <input
+                        type="radio"
+                        checked={t1TriggerMode === 'KEYWORDS'}
+                        onChange={() => setT1TriggerMode('KEYWORDS')}
+                        className="text-purple-600"
+                      />
+                    </div>
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      Triggers only when the message contains selected keywords (e.g. "price", "kati", "order").
+                    </p>
+                  </div>
+                </div>
+
+                {/* Keywords Tag Input (If keywords mode is selected) */}
+                {t1TriggerMode === 'KEYWORDS' && (
+                  <div className="p-4 rounded-2xl bg-zinc-50 border border-zinc-200 space-y-3 animate-in fade-in duration-200">
+                    <label className="text-[11px] font-bold text-zinc-700">Configured Keywords:</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {t1Keywords.map((kw, i) => (
+                        <span
+                          key={i}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-purple-200 text-purple-900 text-xs font-semibold flex items-center gap-1.5 shadow-sm"
+                        >
+                          <span>{kw}</span>
+                          <button
+                            onClick={() => setT1Keywords((prev) => prev.filter((_, idx) => idx !== i))}
+                            className="text-zinc-400 hover:text-red-500"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="text"
+                        placeholder="Add new keyword (e.g. offer, buy, size)..."
+                        value={t1NewKeyword}
+                        onChange={(e) => setT1NewKeyword(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && t1NewKeyword.trim()) {
+                            e.preventDefault();
+                            if (!t1Keywords.includes(t1NewKeyword.trim().toLowerCase())) {
+                              setT1Keywords([...t1Keywords, t1NewKeyword.trim().toLowerCase()]);
+                            }
+                            setT1NewKeyword('');
+                          }
+                        }}
+                        className="flex-1 h-9 px-3 rounded-xl bg-white border border-zinc-300 text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
+                      />
+                      <button
+                        onClick={() => {
+                          if (t1NewKeyword.trim()) {
+                            if (!t1Keywords.includes(t1NewKeyword.trim().toLowerCase())) {
+                              setT1Keywords([...t1Keywords, t1NewKeyword.trim().toLowerCase()]);
+                            }
+                            setT1NewKeyword('');
+                          }
+                        }}
+                        className="h-9 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-sm transition-all"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Step 2: Custom Automated Reply Message */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <MessageCircle className="w-3.5 h-3.5 text-purple-600" />
+                    <span>2. Custom Automated Reply Message</span>
+                  </label>
+                  <span className="text-[10px] text-zinc-400 font-mono">
+                    {t1ReplyText.length} characters
+                  </span>
+                </div>
+
+                <textarea
+                  rows={4}
+                  value={t1ReplyText}
+                  onChange={(e) => setT1ReplyText(e.target.value)}
+                  placeholder="Type your automated response here..."
+                  className="w-full p-3.5 rounded-2xl bg-white border border-zinc-300 text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 leading-relaxed shadow-sm font-sans"
+                />
+              </div>
+
+              {/* Step 3: Product Card Attachment */}
+              <div className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-200/80 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-indigo-950">Attach Featured Product Card</h4>
+                  <p className="text-[11px] text-indigo-700/80">
+                    Automatically sends the Black Velvet Party Dress card with direct "VIEW PRICE" CTA button.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={t1AttachProduct}
+                  onChange={(e) => setT1AttachProduct(e.target.checked)}
+                  className="w-4 h-4 text-purple-600 rounded cursor-pointer"
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-5 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
+              <button
+                onClick={() => setIsTemplate1ModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-zinc-600 hover:bg-zinc-200/60 transition-colors"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleSaveTemplate1}
+                disabled={t1IsSaving}
+                className="h-10 px-6 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md shadow-purple-500/20 transition-all flex items-center gap-2"
+              >
+                {t1IsSaving ? (
+                  <span>Saving...</span>
+                ) : t1SaveSuccess ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Saved & Live!</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Save & Deploy Automation</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
