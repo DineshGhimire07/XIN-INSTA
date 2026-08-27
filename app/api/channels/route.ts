@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase/server';
 import { encryptToken, decryptToken } from '@/lib/crypto/encryption';
+import { InstagramAdapter } from '@/lib/adapters/instagram.adapter';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +29,7 @@ export async function GET() {
 }
 
 /**
- * POST: Manual connect or token verification
+ * POST: Manual connect, token verification, or conversation starters sync
  */
 export async function POST(req: NextRequest) {
   try {
@@ -105,6 +106,41 @@ export async function POST(req: NextRequest) {
       }
 
       return NextResponse.json({ success: true, channel: data });
+    }
+
+    // Action 3: Sync Conversation Starters (Ice Breakers) to Instagram Profile
+    if (action === 'sync_icebreakers') {
+      const { data: channel } = await supabaseServer
+        .from('channels')
+        .select('*')
+        .eq('channel_type', 'INSTAGRAM')
+        .limit(1)
+        .single();
+
+      if (!channel || !channel.encrypted_access_token) {
+        return NextResponse.json({ error: 'No connected Instagram channel found' }, { status: 404 });
+      }
+
+      const decryptedToken = decryptToken(channel.encrypted_access_token);
+      const adapter = new InstagramAdapter();
+      const starters = [
+        { question: '💰 What are your prices?', payload: 'FAQ_PRICES' },
+        { question: '📦 Do you provide delivery?', payload: 'FAQ_DELIVERY' },
+        { question: '💵 Is Cash on Delivery (COD) available?', payload: 'FAQ_COD' },
+      ];
+
+      const res = await adapter.setConversationStarters(decryptedToken, starters);
+      if (!res.success) {
+        return NextResponse.json(
+          { error: res.errorMessage || 'Failed to sync conversation starters to Meta' },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Conversation starters synced to Instagram profile successfully',
+      });
     }
 
     return NextResponse.json({ error: 'Invalid action or parameters' }, { status: 400 });

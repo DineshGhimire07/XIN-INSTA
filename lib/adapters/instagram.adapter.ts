@@ -227,4 +227,43 @@ export class InstagramAdapter {
       };
     }
   }
+
+  /**
+   * Sets up native Instagram Conversation Starters (Ice Breakers) on the account
+   */
+  public async setConversationStarters(
+    accessToken: string,
+    starters: Array<{ question: string; payload: string }>
+  ): Promise<OutboundResult> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/me/messenger_profile?access_token=${encodeURIComponent(accessToken)}`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ice_breakers: starters,
+        }),
+      });
+
+      const json = await response.json();
+      if (!response.ok) {
+        return {
+          success: false,
+          errorCode: json.error?.code,
+          errorMessage: json.error?.message,
+        };
+      }
+
+      return {
+        success: true,
+        platformMessageId: 'ice_breakers_set',
+      };
+    } catch (err) {
+      return {
+        success: false,
+        errorMessage: err instanceof Error ? err.message : 'Network request failed',
+      };
+    }
+  }
 }

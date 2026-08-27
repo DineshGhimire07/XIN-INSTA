@@ -4,6 +4,8 @@ import { generateIdempotencyKey } from '@/lib/queue/idempotency';
 import { matchIntent } from '@/lib/engine/intent-matcher';
 import { selectFromResponsePool } from '@/lib/engine/response-pool';
 import { supabaseServer } from '@/lib/supabase/server';
+import { decryptToken } from '@/lib/crypto/encryption';
+import { InstagramAdapter } from '@/lib/adapters/instagram.adapter';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,13 +64,14 @@ export async function POST(req: NextRequest) {
 
   for (const entry of entries) {
     // -------------------------------------------------------------
-    // A. INBOUND DIRECT MESSAGES (DMs) — Meta Messaging Webhook
+    // A. INBOUND DIRECT MESSAGES (DMs) — Conversation Starters & FAQs
     // -------------------------------------------------------------
     const messaging = (entry.messaging as Array<Record<string, any>>) || [];
     for (const msgEvent of messaging) {
       const senderId = msgEvent.sender?.id;
       const recipientId = msgEvent.recipient?.id;
-      const messageText = msgEvent.message?.text;
+      const messageText = msgEvent.message?.text || msgEvent.postback?.title || '';
+      const quickReplyPayload = msgEvent.message?.quick_reply?.payload || msgEvent.postback?.payload || '';
       const mid = msgEvent.message?.mid;
 
       // Ignore echoes from our own bot/page
@@ -76,8 +79,8 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      if (senderId && messageText) {
-        console.log(`[Meta Webhook] Inbound DM from ${senderId}: "${messageText}"`);
+      if (senderId && (messageText || quickReplyPayload)) {
+        console.log(`[Meta Webhook] Inbound DM from ${senderId}: "${messageText}" (Payload: ${quickReplyPayload})`);
 
         // 1. Upsert Contact
         const { data: contact } = await supabaseServer
@@ -96,6 +99,7 @@ export async function POST(req: NextRequest) {
 
         if (contact) {
           // 2. Find or create active conversation
+          let isNewConversation = false;
           let { data: conversation } = await supabaseServer
             .from('conversations')
             .select('*')
@@ -103,6 +107,7 @@ export async function POST(req: NextRequest) {
             .single();
 
           if (!conversation) {
+            isNewConversation = true;
             const { data: newConv } = await supabaseServer
               .from('conversations')
               .insert({
@@ -130,16 +135,170 @@ export async function POST(req: NextRequest) {
               sender_type: 'USER',
               message_type: 'DIRECT_MESSAGE',
               text: messageText,
-              payload: { mid, timestamp: msgEvent.timestamp },
+              payload: { mid, timestamp: msgEvent.timestamp, quickReplyPayload },
             });
 
-            // 4. Intent & Safety Evaluation
-            const intentResult = matchIntent(messageText);
-            if (intentResult.intent === 'HUMAN_SUPPORT') {
-              await supabaseServer
-                .from('conversations')
-                .update({ status: 'NEEDS_ATTENTION' })
-                .eq('id', conversation.id);
+            // 4. Smart Conversation Starter & FAQ Branching
+            if (conversation.status === 'AUTOMATED' && channel?.encrypted_access_token) {
+              try {
+                const accessToken = decryptToken(channel.encrypted_access_token);
+                const adapter = new InstagramAdapter();
+                const textLower = (messageText + ' ' + quickReplyPayload).toLowerCase();
+
+                // Check human handoff
+                const intentResult = matchIntent(messageText);
+                if (intentResult.intent === 'HUMAN_SUPPORT') {
+                  await supabaseServer
+                    .from('conversations')
+                    .update({ status: 'NEEDS_ATTENTION' })
+                    .eq('id', conversation.id);
+
+                  const handoffText = '👩‍💼 A human support agent from XINVORA has been notified and will take over this chat shortly!';
+                  await adapter.sendDirectMessage(accessToken, senderId, handoffText);
+
+                  await supabaseServer.from('conversation_messages').insert({
+                    conversation_id: conversation.id,
+                    direction: 'OUTBOUND',
+                    sender_type: 'BOT',
+                    message_type: 'DIRECT_MESSAGE',
+                    text: handoffText,
+                  });
+                } 
+                // Branch 1: "💰 What are your prices?" / Pricing inquiry
+                else if (
+                  quickReplyPayload === 'FAQ_PRICES' ||
+                  textLower.includes('price') ||
+                  textLower.includes('kati') ||
+                  textLower.includes('cost') ||
+                  textLower.includes('rate')
+                ) {
+                  const { data: activeProduct } = await supabaseServer
+                    .from('products')
+                    .select('*')
+                    .eq('is_active', true)
+                    .limit(1)
+                    .single();
+
+                  const product = activeProduct || {
+                    title: 'Black Velvet Party Dress',
+                    price: 3499,
+                    currency: 'NPR',
+                    image_url: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
+                    product_url: 'https://xin-insta.vercel.app',
+                  };
+
+                  const replyText = `💰 Here is our featured collection pricing! Tap below to view details and order directly:`;
+                  await adapter.sendDirectMessage(accessToken, senderId, replyText);
+                  await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
+                    title: product.title,
+                    subtitle: `${product.currency || 'NPR'} ${product.price}`,
+                    imageUrl: product.image_url,
+                    productUrl: product.product_url,
+                    buttonText: 'VIEW PRICE',
+                  });
+
+                  await supabaseServer.from('conversation_messages').insert([
+                    {
+                      conversation_id: conversation.id,
+                      direction: 'OUTBOUND',
+                      sender_type: 'BOT',
+                      message_type: 'DIRECT_MESSAGE',
+                      text: replyText,
+                    },
+                    {
+                      conversation_id: conversation.id,
+                      direction: 'OUTBOUND',
+                      sender_type: 'BOT',
+                      message_type: 'DIRECT_MESSAGE',
+                      text: `${product.title} - ${product.currency || 'NPR'} ${product.price}`,
+                    },
+                  ]);
+                }
+                // Branch 2: "📦 Do you provide delivery?" / Delivery info
+                else if (
+                  quickReplyPayload === 'FAQ_DELIVERY' ||
+                  textLower.includes('delivery') ||
+                  textLower.includes('ship') ||
+                  textLower.includes('courier') ||
+                  textLower.includes('valley')
+                ) {
+                  const deliveryText = `📦 Delivery Information:\n\n• Inside Kathmandu Valley: 24 Hours (Free Delivery 🚚)\n• Outside Valley / Across Nepal: 2-3 Business Days ⚡\n\nAll orders are securely packaged with doorstep tracking!`;
+                  await adapter.sendDirectMessage(accessToken, senderId, deliveryText);
+
+                  await supabaseServer.from('conversation_messages').insert({
+                    conversation_id: conversation.id,
+                    direction: 'OUTBOUND',
+                    sender_type: 'BOT',
+                    message_type: 'DIRECT_MESSAGE',
+                    text: deliveryText,
+                  });
+                }
+                // Branch 3: "💵 Is Cash on Delivery (COD) available?" / COD inquiry
+                else if (
+                  quickReplyPayload === 'FAQ_COD' ||
+                  textLower.includes('cod') ||
+                  textLower.includes('cash on delivery') ||
+                  textLower.includes('pay on delivery')
+                ) {
+                  const codText = `💵 Cash on Delivery (COD):\n\nYes! 100% Cash on Delivery is available across all 77 districts in Nepal! 🇳🇵\nYou pay only when your order arrives safely at your doorstep.`;
+                  await adapter.sendDirectMessage(accessToken, senderId, codText);
+
+                  await supabaseServer.from('conversation_messages').insert({
+                    conversation_id: conversation.id,
+                    direction: 'OUTBOUND',
+                    sender_type: 'BOT',
+                    message_type: 'DIRECT_MESSAGE',
+                    text: codText,
+                  });
+                }
+                // Branch 4: General Inbound / Greeting / First Message
+                else {
+                  const welcomeMenuText = `👋 Welcome to XINVORA! ✨\nThank you for reaching out! How can we assist you today?\n\n💬 Quick Options:\n1️⃣ 💰 What are your prices?\n2️⃣ 📦 Do you provide delivery?\n3️⃣ 💵 Is Cash on Delivery (COD) available?\n\nOr feel free to ask any question below!`;
+
+                  const { data: activeProduct } = await supabaseServer
+                    .from('products')
+                    .select('*')
+                    .eq('is_active', true)
+                    .limit(1)
+                    .single();
+
+                  const product = activeProduct || {
+                    title: 'Black Velvet Party Dress',
+                    price: 3499,
+                    currency: 'NPR',
+                    image_url: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
+                    product_url: 'https://xin-insta.vercel.app',
+                  };
+
+                  await adapter.sendDirectMessage(accessToken, senderId, welcomeMenuText);
+                  await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
+                    title: product.title,
+                    subtitle: `${product.currency || 'NPR'} ${product.price}`,
+                    imageUrl: product.image_url,
+                    productUrl: product.product_url,
+                    buttonText: 'VIEW PRICE',
+                  });
+
+                  await supabaseServer.from('conversation_messages').insert([
+                    {
+                      conversation_id: conversation.id,
+                      direction: 'OUTBOUND',
+                      sender_type: 'BOT',
+                      message_type: 'DIRECT_MESSAGE',
+                      text: welcomeMenuText,
+                    },
+                    {
+                      conversation_id: conversation.id,
+                      direction: 'OUTBOUND',
+                      sender_type: 'BOT',
+                      message_type: 'DIRECT_MESSAGE',
+                      text: `${product.title} - ${product.currency || 'NPR'} ${product.price}`,
+                    },
+                  ]);
+                }
+              } catch (dispatchErr) {
+                console.error('[Meta Webhook] Failed to auto-dispatch welcome reply:', dispatchErr);
+              }
             }
           }
         }
