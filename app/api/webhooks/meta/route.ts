@@ -27,9 +27,7 @@ export async function GET(req: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 });
 }
 
-/**
- * POST: Ingests real-time comments & direct messages from Meta
- */
+export async function POST(req: NextRequest) {
   const signature = req.headers.get('x-hub-signature-256');
   const contentType = req.headers.get('content-type') || 'not-present';
   const contentLength = req.headers.get('content-length') || 'not-present';
