@@ -93,6 +93,8 @@ export async function POST(req: NextRequest) {
       const mid = msgEvent.message?.mid || msgEvent.mid || msgEvent.id;
       const isEcho = Boolean(msgEvent.message?.is_echo || msgEvent.is_echo);
 
+      console.log('[Meta Webhook] Raw msgEvent keys:', Object.keys(msgEvent));
+      console.log('[Meta Webhook] msgEvent structure:', Object.entries(msgEvent).map(([k, v]) => `${k}=(${typeof v === 'object' ? Object.keys(v || {}).join(',') : typeof v})`).join('; '));
       console.log(`[Meta Webhook] Event detail: sender=${senderId}, recipient=${recipientId}, text="${messageText}", isEcho=${isEcho}`);
 
       // Ignore echoes sent by the bot itself to prevent infinite loops
