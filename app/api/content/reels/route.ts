@@ -1,66 +1,160 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase/client';
+import { supabaseServer } from '@/lib/supabase/server';
+import { decryptToken } from '@/lib/crypto/encryption';
 
-const SAMPLE_REELS = [
-  {
-    id: 'reel_42',
-    platform_content_id: 'reel_42',
-    content_type: 'REEL',
-    permalink: 'https://instagram.com/reel/C8jKl2xM91',
-    caption: 'Our viral Black Velvet Party Dress is back in stock! ✨ Drop LINK or PRICE below for instant priority checkout access 🛍️',
-    media_url: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
-    views: '48.2K',
-    comments_count: 142,
-    bound_product: 'Black Velvet Party Dress (DRESS-001 - NPR 3,499)',
-  },
-  {
-    id: 'reel_43',
-    platform_content_id: 'reel_43',
-    content_type: 'REEL',
-    permalink: 'https://instagram.com/reel/C8lNx54P32',
-    caption: 'Pure Cashmere Oversized Winter Knit ❄️ Comment KATI to get the price and sizing card in your DMs!',
-    media_url: 'https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=800',
-    views: '29.5K',
-    comments_count: 86,
-    bound_product: 'Cashmere Oversized Knit (KNIT-002 - NPR 4,200)',
-  },
-  {
-    id: 'reel_44',
-    platform_content_id: 'reel_44',
-    content_type: 'REEL',
-    permalink: 'https://instagram.com/reel/C8qYz99K11',
-    caption: 'Emerald Satin Evening Gown — hand-tailored luxury for your wedding season ✨ Comment SHOP for link!',
-    media_url: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?w=800',
-    views: '63.1K',
-    comments_count: 219,
-    bound_product: 'Emerald Satin Evening Gown (GOWN-004 - NPR 5,800)',
-  },
-  {
-    id: 'post_101',
-    platform_content_id: 'post_101',
-    content_type: 'POST',
-    permalink: 'https://instagram.com/p/C8uRt12J99',
-    caption: 'Weekend Outfit Inspiration 👗 Tap our bio link or comment LOOK for the whole set breakdown!',
-    media_url: 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?w=800',
-    views: '15.4K',
-    comments_count: 42,
-    bound_product: 'Organic Cotton Graphic Tee (TEE-003 - NPR 1,850)',
-  },
-];
+export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+interface InstagramMediaItem {
+  id: string;
+  caption?: string;
+  media_type: string;
+  media_url?: string;
+  permalink: string;
+  timestamp: string;
+}
+
+/**
+ * GET: Fetches live Instagram Reels/Posts from Graph API and Supabase mappings
+ */
+export async function GET() {
   try {
-    const { data, error } = await supabase
-      .from('content_items')
+    // 1. Check for active Instagram channel
+    const { data: channel } = await supabaseServer
+      .from('channels')
       .select('*')
-      .order('created_at', { ascending: false });
+      .eq('channel_type', 'INSTAGRAM')
+      .eq('status', 'CONNECTED')
+      .limit(1)
+      .single();
 
-    if (error || !data || data.length === 0) {
-      return NextResponse.json({ reels: SAMPLE_REELS });
+    if (channel?.encrypted_access_token) {
+      try {
+        const token = decryptToken(channel.encrypted_access_token);
+        const res = await fetch(
+          `https://graph.instagram.com/me/media?fields=id,caption,media_type,media_url,permalink,timestamp&access_token=${encodeURIComponent(token)}`
+        );
+        const json = await res.json();
+
+        if (json.data && Array.isArray(json.data)) {
+          // Upsert fresh items to Supabase content_items
+          for (const item of json.data as InstagramMediaItem[]) {
+            await supabaseServer.from('content_items').upsert(
+              {
+                channel_id: channel.id,
+                platform_content_id: item.id,
+                content_type: item.media_type === 'VIDEO' ? 'REEL' : 'POST',
+                permalink: item.permalink,
+                caption: item.caption || 'Official Post',
+                media_url: item.media_url || item.permalink,
+                posted_at: item.timestamp,
+              },
+              { onConflict: 'channel_id,platform_content_id' }
+            );
+          }
+        }
+      } catch (igErr) {
+        console.warn('[IG Graph API fetch warning]:', igErr);
+      }
     }
 
-    return NextResponse.json({ reels: data });
-  } catch (err: any) {
-    return NextResponse.json({ reels: SAMPLE_REELS });
+    // 2. Fetch all content items joined with product mappings
+    const { data: contentItems, error } = await supabaseServer
+      .from('content_items')
+      .select(`
+        id,
+        channel_id,
+        platform_content_id,
+        content_type,
+        permalink,
+        caption,
+        media_url,
+        posted_at,
+        created_at,
+        content_product_mappings (
+          id,
+          is_primary,
+          product:products (
+            id,
+            product_code,
+            title,
+            price,
+            currency
+          )
+        )
+      `)
+      .order('posted_at', { ascending: false });
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      reels: contentItems || [],
+      connectedAccount: channel?.platform_username || null,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal Server Error' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * POST: Maps a Content Item (Reel/Post) to a Product SKU
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { contentItemId, productCode } = body;
+
+    if (!contentItemId) {
+      return NextResponse.json({ error: 'contentItemId is required' }, { status: 400 });
+    }
+
+    if (!productCode || productCode === 'NONE') {
+      // Remove mapping
+      await supabaseServer
+        .from('content_product_mappings')
+        .delete()
+        .eq('content_item_id', contentItemId);
+      return NextResponse.json({ success: true, mapped: null });
+    }
+
+    // Find product
+    const { data: product } = await supabaseServer
+      .from('products')
+      .select('id')
+      .eq('product_code', productCode)
+      .single();
+
+    if (!product) {
+      return NextResponse.json({ error: `Product SKU ${productCode} not found` }, { status: 404 });
+    }
+
+    // Upsert mapping
+    const { data: mapping, error } = await supabaseServer
+      .from('content_product_mappings')
+      .upsert(
+        {
+          content_item_id: contentItemId,
+          product_id: product.id,
+          is_primary: true,
+        },
+        { onConflict: 'content_item_id,product_id' }
+      )
+      .select()
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, mapping });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }
