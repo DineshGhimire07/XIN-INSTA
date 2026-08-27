@@ -15,6 +15,13 @@ export class InstagramAdapter {
     this.apiVersion = process.env.META_GRAPH_API_VERSION || 'v19.0';
   }
 
+  private getBaseUrl(accessToken: string): string {
+    if (accessToken.startsWith('IGAA') || accessToken.startsWith('IG')) {
+      return `https://graph.instagram.com/${this.apiVersion}`;
+    }
+    return `https://graph.facebook.com/${this.apiVersion}`;
+  }
+
   /**
    * Dispatches a private reply to an Instagram comment using the official Meta endpoint
    */
@@ -23,7 +30,8 @@ export class InstagramAdapter {
     commentId: string,
     product: ProductCardPayload
   ): Promise<OutboundResult> {
-    const url = `https://graph.facebook.com/${this.apiVersion}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+    const base = this.getBaseUrl(accessToken);
+    const url = `${base}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
 
     const body = {
       recipient: {
@@ -67,32 +75,31 @@ export class InstagramAdapter {
           success: false,
           errorCode: json.error?.code,
           errorMessage: json.error?.message,
-          isRetryable: [4, 17, 32, 613].includes(json.error?.code),
         };
       }
 
       return {
         success: true,
-        platformMessageId: json.message_id || json.recipient_id,
+        platformMessageId: json.message_id,
       };
     } catch (err) {
       return {
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Network request failed',
-        isRetryable: true,
       };
     }
   }
 
   /**
-   * Posts a public comment reply under an Instagram post/Reel
+   * Posts a public comment reply under an Instagram post or Reel
    */
   public async sendPublicCommentReply(
     accessToken: string,
     commentId: string,
     message: string
   ): Promise<OutboundResult> {
-    const url = `https://graph.facebook.com/${this.apiVersion}/${commentId}/replies?access_token=${encodeURIComponent(accessToken)}`;
+    const base = this.getBaseUrl(accessToken);
+    const url = `${base}/${commentId}/replies?access_token=${encodeURIComponent(accessToken)}`;
 
     try {
       const response = await fetch(url, {
@@ -131,7 +138,8 @@ export class InstagramAdapter {
     recipientId: string,
     text: string
   ): Promise<OutboundResult> {
-    const url = `https://graph.facebook.com/${this.apiVersion}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+    const base = this.getBaseUrl(accessToken);
+    const url = `${base}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
 
     try {
       const response = await fetch(url, {
@@ -172,7 +180,8 @@ export class InstagramAdapter {
     recipientId: string,
     card: ProductCardPayload
   ): Promise<OutboundResult> {
-    const url = `https://graph.facebook.com/${this.apiVersion}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+    const base = this.getBaseUrl(accessToken);
+    const url = `${base}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
 
     const body = {
       recipient: { id: recipientId },
@@ -218,7 +227,7 @@ export class InstagramAdapter {
 
       return {
         success: true,
-        platformMessageId: json.message_id || json.recipient_id,
+        platformMessageId: json.message_id,
       };
     } catch (err) {
       return {
@@ -229,21 +238,27 @@ export class InstagramAdapter {
   }
 
   /**
-   * Sets up native Instagram Conversation Starters (Ice Breakers) on the account
+   * Registers Instagram Ice Breakers / Conversation Starters
    */
   public async setConversationStarters(
     accessToken: string,
-    starters: Array<{ question: string; payload: string }>
+    questions: Array<{ question: string; payload: string }>
   ): Promise<OutboundResult> {
-    const url = `https://graph.facebook.com/${this.apiVersion}/me/messenger_profile?access_token=${encodeURIComponent(accessToken)}`;
+    const base = this.getBaseUrl(accessToken);
+    const url = `${base}/me/messenger_profile?access_token=${encodeURIComponent(accessToken)}`;
+
+    const body = {
+      ice_breakers: questions.map((q) => ({
+        question: q.question,
+        payload: q.payload,
+      })),
+    };
 
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ice_breakers: starters,
-        }),
+        body: JSON.stringify(body),
       });
 
       const json = await response.json();
@@ -257,7 +272,7 @@ export class InstagramAdapter {
 
       return {
         success: true,
-        platformMessageId: 'ice_breakers_set',
+        platformMessageId: json.result,
       };
     } catch (err) {
       return {
