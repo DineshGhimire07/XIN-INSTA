@@ -91,9 +91,13 @@ export async function POST(req: NextRequest) {
       const messageText = msgEvent.message?.text || msgEvent.postback?.title || msgEvent.text || '';
       const quickReplyPayload = msgEvent.message?.quick_reply?.payload || msgEvent.postback?.payload || '';
       const mid = msgEvent.message?.mid || msgEvent.mid || msgEvent.id;
+      const isEcho = Boolean(msgEvent.message?.is_echo || msgEvent.is_echo);
 
-      // Ignore echoes from our own bot/page
-      if (msgEvent.message?.is_echo || msgEvent.is_echo || senderId === channel?.platform_account_id) {
+      console.log(`[Meta Webhook] Event detail: sender=${senderId}, recipient=${recipientId}, text="${messageText}", isEcho=${isEcho}`);
+
+      // Ignore echoes sent by the bot itself to prevent infinite loops
+      if (isEcho) {
+        console.log('[Meta Webhook] Echo event ignored.');
         continue;
       }
 
