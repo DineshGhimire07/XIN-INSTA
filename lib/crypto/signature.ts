@@ -9,44 +9,50 @@ export function verifyMetaWebhookSignature(rawBody: string, signatureHeader: str
   const header = signatureHeader?.trim();
 
   const appSecretConfigured = Boolean(appSecret && appSecret.length > 0);
-  const appSecretLength = appSecret?.length ?? 0;
   const headerPresent = Boolean(header && header.length > 0);
-  const rawBodyLength = Buffer.byteLength(rawBody || '', 'utf8');
-
-  console.log(`[Meta Webhook][Diagnostic] META_APP_SECRET configured: ${appSecretConfigured}`);
-  console.log(`[Meta Webhook][Diagnostic] META_APP_SECRET length: ${appSecretLength}`);
-  console.log(`[Meta Webhook][Diagnostic] x-hub-signature-256 header present: ${headerPresent}`);
 
   if (!appSecretConfigured || !headerPresent) {
-    console.log(`[Meta Webhook][Diagnostic] received signature hex length: 0`);
-    console.log(`[Meta Webhook][Diagnostic] calculated signature hex length: 0`);
-    console.log(`[Meta Webhook][Diagnostic] raw request body byte length: ${rawBodyLength}`);
-    console.log(`[Meta Webhook][Diagnostic] signature match: false`);
+    console.log('[Meta Webhook][Diagnostic] raw-body HMAC matches Meta: false');
+    console.log('[Meta Webhook][Diagnostic] unicode-escaped HMAC matches Meta: false');
     return false;
   }
 
   try {
     const isSha256Prefixed = header!.toLowerCase().startsWith('sha256=');
     const receivedHex = isSha256Prefixed ? header!.slice(7).trim() : header!.trim();
+    const receivedBuf = Buffer.from(receivedHex, 'hex');
 
-    const calculatedHex = crypto
+    // 1. Raw Body HMAC Calculation
+    const calculatedRawHex = crypto
       .createHmac('sha256', appSecret!)
       .update(rawBody, 'utf8')
       .digest('hex');
+    const calculatedRawBuf = Buffer.from(calculatedRawHex, 'hex');
+    const rawMatches =
+      receivedBuf.length === 32 &&
+      calculatedRawBuf.length === 32 &&
+      crypto.timingSafeEqual(receivedBuf, calculatedRawBuf);
 
-    console.log(`[Meta Webhook][Diagnostic] received signature hex length: ${receivedHex.length}`);
-    console.log(`[Meta Webhook][Diagnostic] calculated signature hex length: ${calculatedHex.length}`);
-    console.log(`[Meta Webhook][Diagnostic] raw request body byte length: ${rawBodyLength}`);
+    // 2. Unicode-escaped representation HMAC Calculation
+    const unicodeEscapedBody = rawBody.replace(
+      /[^\x00-\x7F]/g,
+      (c) => '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4)
+    );
+    const calculatedUnicodeHex = crypto
+      .createHmac('sha256', appSecret!)
+      .update(unicodeEscapedBody, 'utf8')
+      .digest('hex');
+    const calculatedUnicodeBuf = Buffer.from(calculatedUnicodeHex, 'hex');
+    const unicodeMatches =
+      receivedBuf.length === 32 &&
+      calculatedUnicodeBuf.length === 32 &&
+      crypto.timingSafeEqual(receivedBuf, calculatedUnicodeBuf);
 
-    const receivedBuf = Buffer.from(receivedHex, 'hex');
-    const calculatedBuf = Buffer.from(calculatedHex, 'hex');
+    // Log ONLY the two requested diagnostic comparisons
+    console.log(`[Meta Webhook][Diagnostic] raw-body HMAC matches Meta: ${rawMatches}`);
+    console.log(`[Meta Webhook][Diagnostic] unicode-escaped HMAC matches Meta: ${unicodeMatches}`);
 
-    const validLength = receivedBuf.length === 32 && calculatedBuf.length === 32;
-    const isMatch = validLength && crypto.timingSafeEqual(receivedBuf, calculatedBuf);
-
-    console.log(`[Meta Webhook][Diagnostic] signature match: ${isMatch}`);
-
-    return isMatch;
+    return rawMatches || unicodeMatches;
   } catch (err) {
     console.error('[Meta Webhook][Diagnostic] error:', err instanceof Error ? err.message : err);
     return false;
