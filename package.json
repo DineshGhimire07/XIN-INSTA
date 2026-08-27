@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "env:sync:production": "node scripts/sync-vercel-env.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.8",
