@@ -11,6 +11,13 @@ export function verifyMetaWebhookSignature(rawBody: string, signatureHeader: str
   const appSecretConfigured = Boolean(appSecret && appSecret.length > 0);
   const headerPresent = Boolean(header && header.length > 0);
 
+  const secretFingerprint = crypto
+    .createHash('sha256')
+    .update(appSecret || '', 'utf8')
+    .digest('hex');
+
+  console.log(`[Meta Webhook][Diagnostic] META_APP_SECRET fingerprint: ${secretFingerprint}`);
+
   if (!appSecretConfigured || !headerPresent) {
     console.log('[Meta Webhook][Diagnostic] raw-body HMAC matches Meta: false');
     console.log('[Meta Webhook][Diagnostic] unicode-escaped HMAC matches Meta: false');
@@ -48,7 +55,6 @@ export function verifyMetaWebhookSignature(rawBody: string, signatureHeader: str
       calculatedUnicodeBuf.length === 32 &&
       crypto.timingSafeEqual(receivedBuf, calculatedUnicodeBuf);
 
-    // Log ONLY the two requested diagnostic comparisons
     console.log(`[Meta Webhook][Diagnostic] raw-body HMAC matches Meta: ${rawMatches}`);
     console.log(`[Meta Webhook][Diagnostic] unicode-escaped HMAC matches Meta: ${unicodeMatches}`);
 
