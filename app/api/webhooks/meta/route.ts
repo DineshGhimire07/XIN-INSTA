@@ -34,12 +34,10 @@ export async function POST(req: NextRequest) {
   const signature = req.headers.get('x-hub-signature-256');
   const rawBody = await req.text();
 
-  // 1. Signature Verification (if secret configured)
-  if (process.env.META_APP_SECRET && signature) {
-    if (!verifyMetaWebhookSignature(rawBody, signature)) {
-      console.error('[Meta Webhook] Signature verification failed.');
-      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
-    }
+  // 1. Strict Meta X-Hub-Signature-256 Verification
+  if (!verifyMetaWebhookSignature(rawBody, signature)) {
+    console.error('[Meta Webhook] Request signature verification failed.');
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
 
   let body: Record<string, unknown>;
