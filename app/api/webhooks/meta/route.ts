@@ -27,23 +27,12 @@ export async function GET(req: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 });
 }
 
+/**
+ * POST: Ingests real-time comments & direct messages from Meta
+ */
 export async function POST(req: NextRequest) {
   const signature = req.headers.get('x-hub-signature-256');
-  const contentType = req.headers.get('content-type') || 'not-present';
-  const contentLength = req.headers.get('content-length') || 'not-present';
   const rawBody = await req.text();
-
-  const startsWithSha256 = Boolean(signature && signature.toLowerCase().startsWith('sha256='));
-  const headerTotalLength = signature?.length ?? 0;
-  const hexLengthAfterPrefix = startsWithSha256 ? signature!.slice(7).trim().length : headerTotalLength;
-  const rawBodyByteLength = Buffer.byteLength(rawBody || '', 'utf8');
-
-  console.log(`[Meta Webhook][Diagnostic] 1. x-hub-signature-256 header starts with "sha256=": ${startsWithSha256}`);
-  console.log(`[Meta Webhook][Diagnostic] 2. signature header total length: ${headerTotalLength}`);
-  console.log(`[Meta Webhook][Diagnostic] 3. signature hex length after removing "sha256=": ${hexLengthAfterPrefix}`);
-  console.log(`[Meta Webhook][Diagnostic] 4. request Content-Type: ${contentType}`);
-  console.log(`[Meta Webhook][Diagnostic] 5. request Content-Length header, if present: ${contentLength}`);
-  console.log(`[Meta Webhook][Diagnostic] 6. raw body byte length: ${rawBodyByteLength}`);
 
   // 1. Strict Meta X-Hub-Signature-256 Verification
   if (!verifyMetaWebhookSignature(rawBody, signature)) {

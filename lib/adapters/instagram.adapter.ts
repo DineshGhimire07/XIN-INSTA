@@ -163,4 +163,68 @@ export class InstagramAdapter {
       };
     }
   }
+
+  /**
+   * Sends a rich generic template card with buttons directly to a user's DM
+   */
+  public async sendGenericCardDirectMessage(
+    accessToken: string,
+    recipientId: string,
+    card: ProductCardPayload
+  ): Promise<OutboundResult> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+
+    const body = {
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'generic',
+            elements: [
+              {
+                title: card.title,
+                subtitle: card.subtitle,
+                image_url: card.imageUrl,
+                buttons: [
+                  {
+                    type: 'web_url',
+                    url: card.productUrl,
+                    title: card.buttonText || 'VIEW PRICE',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const json = await response.json();
+      if (!response.ok) {
+        return {
+          success: false,
+          errorCode: json.error?.code,
+          errorMessage: json.error?.message,
+        };
+      }
+
+      return {
+        success: true,
+        platformMessageId: json.message_id || json.recipient_id,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        errorMessage: err instanceof Error ? err.message : 'Network request failed',
+      };
+    }
+  }
 }

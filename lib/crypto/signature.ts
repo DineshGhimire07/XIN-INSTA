@@ -1,66 +1,52 @@
 import crypto from 'crypto';
 
 /**
- * Empirical Diagnostic Signature Verification:
- * Evaluates the real incoming Meta request against candidate secrets:
- * 1. Current META_APP_SECRET (from environment)
- * 2. Instagram App Secret (from Instagram App product)
+ * Validates Meta X-Hub-Signature-256 HMAC against the raw request body
+ * Strictly enforces official Meta HMAC SHA-256 signature verification with safe diagnostics.
  */
 export function verifyMetaWebhookSignature(rawBody: string, signatureHeader: string | null): boolean {
-  const currentMetaSecret = process.env.META_APP_SECRET?.trim();
-  const instagramAppSecret = '11e7adfd7ec6fd939aae9635deaf82ce';
-
+  const appSecret = process.env.META_APP_SECRET?.trim();
   const header = signatureHeader?.trim();
+
+  const appSecretConfigured = Boolean(appSecret && appSecret.length > 0);
+  const appSecretLength = appSecret?.length ?? 0;
   const headerPresent = Boolean(header && header.length > 0);
   const rawBodyLength = Buffer.byteLength(rawBody || '', 'utf8');
 
-  if (!headerPresent) {
-    console.log('[Meta Webhook][Diagnostic] current META_APP_SECRET matches Meta: false');
-    console.log('[Meta Webhook][Diagnostic] Instagram App Secret matches Meta: false');
-    console.log(`[Meta Webhook][Diagnostic] raw body byte length: ${rawBodyLength}`);
-    console.log('[Meta Webhook][Diagnostic] received signature format/length: not-present');
+  console.log(`[Meta Webhook][Diagnostic] META_APP_SECRET configured: ${appSecretConfigured}`);
+  console.log(`[Meta Webhook][Diagnostic] META_APP_SECRET length: ${appSecretLength}`);
+  console.log(`[Meta Webhook][Diagnostic] x-hub-signature-256 header present: ${headerPresent}`);
+
+  if (!appSecretConfigured || !headerPresent) {
+    console.log(`[Meta Webhook][Diagnostic] received signature hex length: 0`);
+    console.log(`[Meta Webhook][Diagnostic] calculated signature hex length: 0`);
+    console.log(`[Meta Webhook][Diagnostic] raw request body byte length: ${rawBodyLength}`);
+    console.log(`[Meta Webhook][Diagnostic] signature match: false`);
     return false;
   }
 
   try {
     const isSha256Prefixed = header!.toLowerCase().startsWith('sha256=');
     const receivedHex = isSha256Prefixed ? header!.slice(7).trim() : header!.trim();
-    const receivedBuf = Buffer.from(receivedHex, 'hex');
 
-    const signatureFormat = `sha256_prefix=${isSha256Prefixed}, total_len=${header!.length}, hex_len=${receivedHex.length}`;
-
-    // 1. Candidate 1: Current META_APP_SECRET
-    let currentMetaMatches = false;
-    if (currentMetaSecret) {
-      const calculatedCurrentHex = crypto
-        .createHmac('sha256', currentMetaSecret)
-        .update(rawBody, 'utf8')
-        .digest('hex');
-      const calculatedCurrentBuf = Buffer.from(calculatedCurrentHex, 'hex');
-      currentMetaMatches =
-        receivedBuf.length === 32 &&
-        calculatedCurrentBuf.length === 32 &&
-        crypto.timingSafeEqual(receivedBuf, calculatedCurrentBuf);
-    }
-
-    // 2. Candidate 2: Instagram App Secret
-    const calculatedInstaHex = crypto
-      .createHmac('sha256', instagramAppSecret)
+    const calculatedHex = crypto
+      .createHmac('sha256', appSecret!)
       .update(rawBody, 'utf8')
       .digest('hex');
-    const calculatedInstaBuf = Buffer.from(calculatedInstaHex, 'hex');
-    const instagramMatches =
-      receivedBuf.length === 32 &&
-      calculatedInstaBuf.length === 32 &&
-      crypto.timingSafeEqual(receivedBuf, calculatedInstaBuf);
 
-    // Strictly log only the empirical comparison results
-    console.log(`[Meta Webhook][Diagnostic] current META_APP_SECRET matches Meta: ${currentMetaMatches}`);
-    console.log(`[Meta Webhook][Diagnostic] Instagram App Secret matches Meta: ${instagramMatches}`);
-    console.log(`[Meta Webhook][Diagnostic] raw body byte length: ${rawBodyLength}`);
-    console.log(`[Meta Webhook][Diagnostic] received signature format/length: ${signatureFormat}`);
+    console.log(`[Meta Webhook][Diagnostic] received signature hex length: ${receivedHex.length}`);
+    console.log(`[Meta Webhook][Diagnostic] calculated signature hex length: ${calculatedHex.length}`);
+    console.log(`[Meta Webhook][Diagnostic] raw request body byte length: ${rawBodyLength}`);
 
-    return currentMetaMatches || instagramMatches;
+    const receivedBuf = Buffer.from(receivedHex, 'hex');
+    const calculatedBuf = Buffer.from(calculatedHex, 'hex');
+
+    const validLength = receivedBuf.length === 32 && calculatedBuf.length === 32;
+    const isMatch = validLength && crypto.timingSafeEqual(receivedBuf, calculatedBuf);
+
+    console.log(`[Meta Webhook][Diagnostic] signature match: ${isMatch}`);
+
+    return isMatch;
   } catch (err) {
     console.error('[Meta Webhook][Diagnostic] error:', err instanceof Error ? err.message : err);
     return false;
