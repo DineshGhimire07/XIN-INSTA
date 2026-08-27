@@ -63,19 +63,37 @@ export async function POST(req: NextRequest) {
   const accountId = channel?.account_id || 'a0000000-0000-0000-0000-000000000001';
 
   for (const entry of entries) {
+    console.log('[Meta Webhook] Inbound entry keys:', Object.keys(entry));
+
+    // Normalize all possible Meta DM formats (messaging, standby, changes.messages)
+    const dmEvents: Array<Record<string, any>> = [];
+
+    if (Array.isArray(entry.messaging)) {
+      dmEvents.push(...(entry.messaging as Array<Record<string, any>>));
+    }
+    if (Array.isArray(entry.standby)) {
+      dmEvents.push(...(entry.standby as Array<Record<string, any>>));
+    }
+    if (Array.isArray(entry.changes)) {
+      for (const ch of entry.changes as Array<Record<string, any>>) {
+        if (ch.field === 'messages' && ch.value) {
+          dmEvents.push(ch.value);
+        }
+      }
+    }
+
     // -------------------------------------------------------------
     // A. INBOUND DIRECT MESSAGES (DMs) — Template 1 & Custom Auto-Replies
     // -------------------------------------------------------------
-    const messaging = (entry.messaging as Array<Record<string, any>>) || [];
-    for (const msgEvent of messaging) {
-      const senderId = msgEvent.sender?.id;
-      const recipientId = msgEvent.recipient?.id;
-      const messageText = msgEvent.message?.text || msgEvent.postback?.title || '';
+    for (const msgEvent of dmEvents) {
+      const senderId = msgEvent.sender?.id || msgEvent.from?.id;
+      const recipientId = msgEvent.recipient?.id || msgEvent.to?.id;
+      const messageText = msgEvent.message?.text || msgEvent.postback?.title || msgEvent.text || '';
       const quickReplyPayload = msgEvent.message?.quick_reply?.payload || msgEvent.postback?.payload || '';
-      const mid = msgEvent.message?.mid;
+      const mid = msgEvent.message?.mid || msgEvent.mid || msgEvent.id;
 
       // Ignore echoes from our own bot/page
-      if (msgEvent.message?.is_echo || senderId === channel?.platform_account_id) {
+      if (msgEvent.message?.is_echo || msgEvent.is_echo || senderId === channel?.platform_account_id) {
         continue;
       }
 
@@ -135,7 +153,7 @@ export async function POST(req: NextRequest) {
               sender_type: 'USER',
               message_type: 'DIRECT_MESSAGE',
               text: messageText,
-              payload: { mid, timestamp: msgEvent.timestamp, quickReplyPayload },
+              payload: { mid, timestamp: msgEvent.timestamp || Date.now(), quickReplyPayload },
             });
 
             // 4. Evaluate Automation Rules (Template 1 & Custom DM Rules)
@@ -154,7 +172,8 @@ export async function POST(req: NextRequest) {
                     .eq('id', conversation.id);
 
                   const handoffText = '👩‍💼 A human support agent from XINVORA has been notified and will take over this chat shortly!';
-                  await adapter.sendDirectMessage(accessToken, senderId, handoffText);
+                  const res = await adapter.sendDirectMessage(accessToken, senderId, handoffText);
+                  console.log('[Meta Webhook] Handoff DM dispatch result:', res);
 
                   await supabaseServer.from('conversation_messages').insert({
                     conversation_id: conversation.id,
@@ -173,7 +192,8 @@ export async function POST(req: NextRequest) {
                   textLower.includes('valley')
                 ) {
                   const deliveryText = `📦 Delivery Information:\n\n• Inside Kathmandu Valley: 24 Hours (Free Delivery 🚚)\n• Outside Valley / Across Nepal: 2-3 Business Days ⚡\n\nAll orders are securely packaged with doorstep tracking!`;
-                  await adapter.sendDirectMessage(accessToken, senderId, deliveryText);
+                  const res = await adapter.sendDirectMessage(accessToken, senderId, deliveryText);
+                  console.log('[Meta Webhook] Delivery DM dispatch result:', res);
 
                   await supabaseServer.from('conversation_messages').insert({
                     conversation_id: conversation.id,
@@ -191,7 +211,8 @@ export async function POST(req: NextRequest) {
                   textLower.includes('pay on delivery')
                 ) {
                   const codText = `💵 Cash on Delivery (COD):\n\nYes! 100% Cash on Delivery is available across all 77 districts in Nepal! 🇳🇵\nYou pay only when your order arrives safely at your doorstep.`;
-                  await adapter.sendDirectMessage(accessToken, senderId, codText);
+                  const res = await adapter.sendDirectMessage(accessToken, senderId, codText);
+                  console.log('[Meta Webhook] COD DM dispatch result:', res);
 
                   await supabaseServer.from('conversation_messages').insert({
                     conversation_id: conversation.id,
@@ -230,8 +251,11 @@ export async function POST(req: NextRequest) {
                   }
 
                   if (shouldTrigger) {
+                    console.log(`[Meta Webhook] Triggering custom DM reply to ${senderId}: "${replyText}"`);
+
                     // Send custom reply text
-                    await adapter.sendDirectMessage(accessToken, senderId, replyText);
+                    const textRes = await adapter.sendDirectMessage(accessToken, senderId, replyText);
+                    console.log('[Meta Webhook] Text DM dispatch result:', textRes);
 
                     await supabaseServer.from('conversation_messages').insert({
                       conversation_id: conversation.id,
@@ -258,13 +282,14 @@ export async function POST(req: NextRequest) {
                         product_url: 'https://xin-insta.vercel.app',
                       };
 
-                      await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
+                      const cardRes = await adapter.sendGenericCardDirectMessage(accessToken, senderId, {
                         title: product.title,
                         subtitle: `${product.currency || 'NPR'} ${product.price}`,
                         imageUrl: product.image_url,
                         productUrl: product.product_url,
                         buttonText: 'VIEW PRICE',
                       });
+                      console.log('[Meta Webhook] Card DM dispatch result:', cardRes);
 
                       await supabaseServer.from('conversation_messages').insert({
                         conversation_id: conversation.id,
